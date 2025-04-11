@@ -47,8 +47,10 @@ The following commands are supported:
     - If both `<src>` and `<dst>` are provided, the element at `<src>` is moved to `<dst>`.
     - If the path starts with `/`, it is absolute; otherwise, it is relative to the current position.
 
-11. **`save`**  
-    Saves the current state of the storage.
+11. **`save <src>`**
+    Saves the current state of the repository.
+     - If a path is specified, the repository will be saved to that path.
+     - If the path begins with `/`, it is absolute; otherwise, it is relative to the current position.
 
 12. **`e`** or **`exit`**  
     Closes the application without saving changes.

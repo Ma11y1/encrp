@@ -133,7 +133,11 @@ func (c *CommandProcessorHandler) Start(ctx context.Context) error {
 			}
 			err = c.handleMoveNode(srcPath, dstPath)
 		case "save":
-			err = c.handleSave()
+			path := ""
+			if len(tokens) > 1 {
+				path = tokens[1]
+			}
+			err = c.handleSave(path)
 		case "e", "exit":
 			fmt.Println("Exiting...")
 			return nil
@@ -617,8 +621,11 @@ func (c *CommandProcessorHandler) handleChangeData(path, key, value string) erro
 	return nil
 }
 
-func (c *CommandProcessorHandler) handleSave() error {
-	return c.services.Storage.SaveStorage(c.config.Storage.Path())
+func (c *CommandProcessorHandler) handleSave(path string) error {
+	if path == "" {
+		path = c.config.Storage.Path()
+	}
+	return c.services.Storage.SaveStorage(path)
 }
 
 func (c *CommandProcessorHandler) getTokens(data string) []string {
