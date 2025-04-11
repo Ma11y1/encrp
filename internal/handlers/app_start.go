@@ -33,6 +33,9 @@ func (h *AppStartHandler) Start(ctx context.Context) error {
 		if err := promptInput("pwd > ", &password, 3); err != nil {
 			return errors.Wrap(err, "AppStartHandler.Start()", "Error reading password")
 		}
+		if password == "exit" {
+			return errors.New("AppStartHandler.Start()", "Premature termination")
+		}
 	}
 
 	if ctx.Err() != nil {
@@ -42,6 +45,9 @@ func (h *AppStartHandler) Start(ctx context.Context) error {
 	if pathStorage == "" {
 		if err := promptInput("storage > ", &pathStorage, 3); err != nil {
 			return errors.WrapLog(err, "AppStartHandler.Start()", "Error reading path storage")
+		}
+		if pathStorage == "exit" {
+			return errors.New("AppStartHandler.Start()", "Premature termination")
 		}
 	}
 
