@@ -14,6 +14,7 @@ type Node struct {
 	tsCreate    int64
 	tsModify    atomic.Int64
 	description atomic.Value // string
+	tags        []string
 	data        *Data
 	parent      *Node
 	children    *Children
@@ -24,6 +25,7 @@ type storageNode struct {
 	TsCreate    int64     `json:"ts_create"`
 	TsModify    int64     `json:"ts_modify"`
 	Description string    `json:"desc"`
+	Tags        []string  `json:"tags"`
 	Data        *Data     `json:"data"`
 	Children    *Children `json:"children"`
 }
@@ -34,6 +36,7 @@ func NewStorageNode(name string) *Node {
 		tsCreate: now,
 		data:     NewStorageData(),
 		children: NewStorageChildren(),
+		tags:     make([]string, 0),
 	}
 	node.name.Store(name)
 	node.tsModify.Store(now)
@@ -76,6 +79,78 @@ func (n *Node) SetName(name string) error {
 func (n *Node) SetDescription(description string) {
 	n.description.Store(description)
 	n.updateTsModify()
+}
+
+func (n *Node) SetTags(tags ...string) {
+	if len(tags) == 0 {
+		return
+	}
+	n.mtx.Lock()
+	defer n.mtx.Unlock()
+
+	existing := make(map[string]struct{}, len(n.tags))
+	for _, t := range n.tags {
+		existing[t] = struct{}{}
+	}
+
+	isUpdated := false
+	for _, tag := range tags {
+		if tag == "" {
+			continue
+		}
+		if _, exists := existing[tag]; !exists {
+			n.tags = append(n.tags, tag)
+			existing[tag] = struct{}{}
+			isUpdated = true
+		}
+	}
+
+	if isUpdated {
+		n.updateTsModify()
+	}
+}
+
+func (n *Node) RemoveTags(tags ...string) {
+	if len(tags) == 0 {
+		return
+	}
+	n.mtx.Lock()
+	defer n.mtx.Unlock()
+
+	isUpdated := false
+	for _, tag := range tags {
+		if tag == "" {
+			continue
+		}
+		for i := 0; i < len(n.tags); i++ {
+			if n.tags[i] == tag {
+				n.tags[i], n.tags[len(n.tags)-1] = n.tags[len(n.tags)-1], n.tags[i]
+				n.tags = n.tags[:len(n.tags)-1]
+				isUpdated = true
+				break
+			}
+		}
+	}
+
+	if isUpdated {
+		n.updateTsModify()
+	}
+}
+
+func (n *Node) HasTag(tag string) bool {
+	if tag == "" {
+		return false
+	}
+	n.mtx.RLock()
+	defer n.mtx.RUnlock()
+
+	for _, t := range n.tags {
+		if tag == t {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (n *Node) RemoveParent() {
@@ -135,6 +210,7 @@ func (n *Node) UnmarshalJSON(data []byte) error {
 	n.tsCreate = tempStorage.TsCreate
 	n.tsModify.Store(tempStorage.TsModify)
 	n.description.Store(tempStorage.Description)
+	n.tags = tempStorage.Tags
 	n.data = tempStorage.Data
 	n.children = tempStorage.Children
 	n.data.parent, n.children.parent = n, n
@@ -157,6 +233,7 @@ func (n *Node) MarshalJSON() ([]byte, error) {
 		TsCreate:    n.tsCreate,
 		TsModify:    n.TsModify(),
 		Description: n.Description(),
+		Tags:        n.tags,
 		Data:        n.data,
 		Children:    n.children,
 	}
