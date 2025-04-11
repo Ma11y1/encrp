@@ -618,7 +618,7 @@ func (c *CommandProcessorHandler) handleChangeData(path, key, value string) erro
 }
 
 func (c *CommandProcessorHandler) handleSave() error {
-	return c.services.StorageProvider.SaveStorage()
+	return c.services.Storage.SaveStorage(c.config.Storage.Path())
 }
 
 func (c *CommandProcessorHandler) getTokens(data string) []string {

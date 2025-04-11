@@ -48,7 +48,7 @@ func (h *AppStartHandler) Start(ctx context.Context) error {
 	h.config.General.SetPassword(password)
 	h.config.Storage.SetPath(pathStorage)
 
-	err := h.services.StorageProvider.LoadStorage()
+	err := h.services.Storage.LoadStorage(pathStorage)
 	if err != nil {
 		fmt.Printf("Error loading storage by path '%s'\n", pathStorage)
 		return errors.Wrapf(err, "AppStartHandler.Start()", "Error loading storage by path '%s': %v", pathStorage, err)
@@ -57,7 +57,7 @@ func (h *AppStartHandler) Start(ctx context.Context) error {
 	if ctx.Err() != nil {
 		return errors.WrapLog(ctx.Err(), "App.Start()", "Preliminary completion of execution")
 	}
-	
+
 	return nil
 }
 

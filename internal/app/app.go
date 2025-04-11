@@ -25,8 +25,7 @@ func NewApp() (*App, error) {
 
 	a.services.Crypt = services.NewCryptAESGCMService(a.config, a.services)
 	a.services.Keys = services.NewKeyService(a.config, a.services)
-	a.services.Storage = services.NewStorageService(a.config, a.services)
-	a.services.StorageProvider = services.NewFileStorageProviderService(a.config, a.services)
+	a.services.Storage = services.NewFileStorageService(a.config, a.services)
 
 	a.handlers.AppStart = handlers.NewAppStartHandler(a.config, a.handlers, a.services)
 	a.handlers.AppStop = handlers.NewAppStopHandler(a.config, a.handlers, a.services)
