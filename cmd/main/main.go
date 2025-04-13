@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encrp/internal/app"
+	"encrp/internal/logger"
 	"log"
 	"os"
 	"os/signal"
@@ -18,6 +19,7 @@ func main() {
 	defer func() {
 		if err := recover(); err != nil {
 			a.Stop()
+			logger.Errf("Main()", "Fatal error stopping app: %v", err)
 		}
 	}()
 
