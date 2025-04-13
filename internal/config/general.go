@@ -10,7 +10,7 @@ type General struct {
 }
 
 func newGeneral() *General {
-	cfg := &General{version: "1.0"}
+	cfg := &General{version: "1.1"}
 	password, err := utils.NewSecurePassword("")
 	if err != nil {
 		panic(err)
