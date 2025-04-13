@@ -15,6 +15,7 @@ type Node struct {
 	tsModify    atomic.Int64
 	description atomic.Value // string
 	tags        []string
+	cTags       []string // cache
 	data        *Data
 	parent      *Node
 	children    *Children
@@ -37,6 +38,7 @@ func NewStorageNode(name string) *Node {
 		data:     NewStorageData(),
 		children: NewStorageChildren(),
 		tags:     make([]string, 0),
+		cTags:    make([]string, 0),
 	}
 	node.name.Store(name)
 	node.tsModify.Store(now)
@@ -81,7 +83,22 @@ func (n *Node) SetDescription(description string) {
 	n.updateTsModify()
 }
 
-func (n *Node) SetTags(tags ...string) {
+func (n *Node) Tags() []string {
+	n.mtx.RLock()
+	defer n.mtx.RUnlock()
+
+	if len(n.cTags) != 0 {
+		return n.cTags
+	}
+
+	for _, tag := range n.tags {
+		n.cTags = append(n.cTags, tag)
+	}
+
+	return n.cTags
+}
+
+func (n *Node) AddTags(tags ...string) {
 	if len(tags) == 0 {
 		return
 	}
@@ -106,6 +123,7 @@ func (n *Node) SetTags(tags ...string) {
 	}
 
 	if isUpdated {
+		n.cTags = n.cTags[:0]
 		n.updateTsModify()
 	}
 }
@@ -133,8 +151,30 @@ func (n *Node) RemoveTags(tags ...string) {
 	}
 
 	if isUpdated {
+		n.cTags = n.cTags[:0]
 		n.updateTsModify()
 	}
+}
+
+func (n *Node) HasTags(tags ...string) bool {
+	if len(tags) == 0 {
+		return false
+	}
+	n.mtx.RLock()
+	defer n.mtx.RUnlock()
+
+	for _, t1 := range tags {
+		if t1 == "" {
+			continue
+		}
+		for _, t2 := range n.tags {
+			if t2 == t1 {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 func (n *Node) HasTag(tag string) bool {

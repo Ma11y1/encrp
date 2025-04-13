@@ -82,8 +82,8 @@ func (c *CommandProcessorHandler) Start(ctx context.Context) error {
 			err = c.handleCreateNode(path)
 		case "rm", "remove":
 			if len(tokens) < 2 {
-				logger.Warn("CommandProcessorHandler.Start()", "Invalid syntax command: 'rm <src>")
-				fmt.Println("Invalid syntax command: 'rm <src>'")
+				logger.Warn("CommandProcessorHandler.Start()", "Invalid syntax command: 'remove(rm) <src>")
+				fmt.Println("Invalid syntax command: 'remove(rm) <src>'")
 				break
 			}
 			err = c.handleDeleteNode(tokens[1])
@@ -95,8 +95,8 @@ func (c *CommandProcessorHandler) Start(ctx context.Context) error {
 			err = c.handleShowNode(path)
 		case "shw", "showword":
 			if len(tokens) < 2 {
-				logger.Warn("CommandProcessorHandler.Start()", "Invalid syntax command: 'showword <word>'")
-				fmt.Println("Invalid syntax command: 'showword <word>'")
+				logger.Warn("CommandProcessorHandler.Start()", "Invalid syntax command: 'showword(shw) <word>'")
+				fmt.Println("Invalid syntax command: 'showword(shw) <word>'")
 				break
 			}
 			err = c.handleShowNodesByWord(tokens[1])
@@ -114,15 +114,15 @@ func (c *CommandProcessorHandler) Start(ctx context.Context) error {
 			err = c.handleChangeData(path, key, value)
 		case "ch", "change":
 			if len(tokens) <= 1 {
-				logger.Warn("CommandProcessorHandler.Start()", "Invalid syntax command: 'change <src>")
-				fmt.Println("Invalid syntax command: 'change <src>'")
+				logger.Warn("CommandProcessorHandler.Start()", "Invalid syntax command: 'change(ch) <src>")
+				fmt.Println("Invalid syntax command: 'change(ch) <src>'")
 				break
 			}
 			err = c.handleChangeNode(tokens[1])
 		case "mv", "move":
 			if len(tokens) < 2 {
-				logger.Warn("CommandProcessorHandler.Start()", "Invalid syntax command: 'move <src> <dst> or move <dst>")
-				fmt.Println("Invalid syntax command: 'move <src> <dst> or move <dst>'")
+				logger.Warn("CommandProcessorHandler.Start()", "Invalid syntax command: 'move(mv) <src> <dst> or move(mv) <dst>")
+				fmt.Println("Invalid syntax command: 'move(mv) <src> <dst> or move(mv) <dst>'")
 				break
 			}
 			srcPath := ""
@@ -132,6 +132,55 @@ func (c *CommandProcessorHandler) Start(ctx context.Context) error {
 				dstPath = tokens[2]
 			}
 			err = c.handleMoveNode(srcPath, dstPath)
+		case "addtag":
+			if len(tokens) < 2 {
+				logger.Warn("CommandProcessorHandler.Start()", "Invalid syntax command: 'addtag <tag> or addtag <src> <tag>")
+				fmt.Println("Invalid syntax command: 'addtag <tag> or addtag <src> <tag>'")
+				break
+			}
+			src, tag := "", ""
+			if len(tokens) > 2 {
+				src = tokens[1]
+				tag = tokens[2]
+			} else if len(tokens) > 1 {
+				tag = tokens[1]
+			}
+			err = c.handleAddNodeTags(src, []string{tag})
+		case "addtags": // only current node
+			if len(tokens) < 2 {
+				logger.Warn("CommandProcessorHandler.Start()", "Invalid syntax command: 'addtags <tags...>")
+				fmt.Println("Invalid syntax command: 'addtags <tags...>")
+				break
+			}
+			err = c.handleAddNodeTags("", tokens[1:])
+		case "rmtag", "removetag":
+			if len(tokens) < 2 {
+				logger.Warn("CommandProcessorHandler.Start()", "Invalid syntax command: 'removetag(rmtag) <tag> or removetag(rmtag) <src> <tag>")
+				fmt.Println("Invalid syntax command: 'removetag(rmtag) <tag>' or removetag(rmtag) <src> <tag>")
+				break
+			}
+			src, tag := "", ""
+			if len(tokens) > 2 {
+				src = tokens[1]
+				tag = tokens[2]
+			} else if len(tokens) > 1 {
+				tag = tokens[1]
+			}
+			err = c.handleRemoveNodeTags(src, []string{tag})
+		case "rmtags", "removetags": // only current node
+			if len(tokens) < 2 {
+				logger.Warn("CommandProcessorHandler.Start()", "Invalid syntax command: 'removetags(rmtags) <tags...>")
+				fmt.Println("Invalid syntax command: 'removetags(rmtags) <tags...>'")
+				break
+			}
+			err = c.handleRemoveNodeTags("", tokens[1:])
+		case "shtags", "showtags":
+			if len(tokens) < 2 {
+				logger.Warn("CommandProcessorHandler.Start()", "Invalid syntax command: 'showtags(shtags) <tag...>")
+				fmt.Println("Invalid syntax command: 'showtags(shtags) <tag...>'")
+				break
+			}
+			err = c.handleShowNodesByTags(tokens[1:])
 		case "save":
 			path := ""
 			if len(tokens) > 1 {
@@ -221,12 +270,13 @@ func (c *CommandProcessorHandler) handleShowChildrenList() error {
 	}
 
 	for i, child := range children {
-		fmt.Printf("%d. [%s] [children: %d] [create: %s] [modify: %s] descr: %s\n",
+		fmt.Printf("%d. [%s] [children: %d] [create: %s] [modify: %s] [tags: %s] [descr: %s]\n",
 			i+1,
 			child.Name(),
 			child.Children().Count(),
 			time.Unix(child.TsCreate(), 0).Format("2006-01-02 15:04:05"),
 			time.Unix(child.TsModify(), 0).Format("2006-01-02 15:04:05"),
+			strings.Join(child.Tags(), ";"),
 			child.Description(),
 		)
 	}
@@ -249,6 +299,10 @@ func (c *CommandProcessorHandler) handleShowNode(path string) error {
 }
 
 func (c *CommandProcessorHandler) handleShowNodesByWord(word string) error {
+	if word == "" {
+		return fmt.Errorf("word is empty")
+	}
+
 	str := c.services.Storage
 	err := str.WalkNodes(func(node *storage.Node) {
 		if strings.Contains(node.Name(), word) || strings.Contains(node.Description(), word) {
@@ -258,15 +312,21 @@ func (c *CommandProcessorHandler) handleShowNodesByWord(word string) error {
 	if err != nil {
 		return fmt.Errorf("failed to walk nodes: %v", err)
 	}
+
 	return nil
 }
 
 func (c *CommandProcessorHandler) showNode(node *storage.Node) {
-	fmt.Printf("[%s]\n\tcreate: %s\n\tmodify: %s\n",
+	fmt.Printf("--------------- [%s] ---------------\n\tcreate: %s\n\tmodify: %s\n",
 		node.Name(),
 		time.Unix(node.TsCreate(), 0).Format("2006-01-02 15:04:05"),
 		time.Unix(node.TsModify(), 0).Format("2006-01-02 15:04:05"),
 	)
+
+	tags := node.Tags()
+	if len(tags) > 0 {
+		fmt.Println("\ttags: |", strings.Join(tags, ";"), "|")
+	}
 
 	if node.Description() != "" {
 		fmt.Println("\tdescription: ", node.Description())
@@ -280,12 +340,13 @@ func (c *CommandProcessorHandler) showNode(node *storage.Node) {
 			if child == nil {
 				continue
 			}
-			fmt.Printf("\t\t%d. [%s] [children: %d] [create: %s] [modify: %s] descr: %s\n",
+			fmt.Printf("\t\t%d. [%s] [children: %d] [create: %s] [modify: %s] [tags: %s] descr: %s\n",
 				i+1,
 				child.Name(),
 				child.Children().Count(),
 				time.Unix(child.TsCreate(), 0).Format("2006-01-02 15:04:05"),
 				time.Unix(child.TsModify(), 0).Format("2006-01-02 15:04:05"),
+				strings.Join(child.Tags(), ";"),
 				child.Description(),
 			)
 		}
@@ -299,6 +360,7 @@ func (c *CommandProcessorHandler) showNode(node *storage.Node) {
 			fmt.Printf("\t\t%s: %s\n", key, nodeData.Get(key))
 		}
 	}
+	fmt.Println("------------------------------------")
 }
 
 func (c *CommandProcessorHandler) handleCreateNode(path string) error {
@@ -348,6 +410,15 @@ func (c *CommandProcessorHandler) handleCreateNode(path string) error {
 
 	newNode := storage.NewStorageNode(name)
 	newNode.SetDescription(strings.TrimSpace(description))
+
+	fmt.Print("tags>> ")
+	tagsLine, err := c.consoleReader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("failed to read tags: %v", err)
+	}
+	if tagsLine != "" {
+		newNode.AddTags(c.getTokens(tagsLine)...)
+	}
 
 	for {
 		fmt.Print("data>> ")
@@ -621,6 +692,58 @@ func (c *CommandProcessorHandler) handleChangeData(path, key, value string) erro
 	return nil
 }
 
+func (c *CommandProcessorHandler) handleAddNodeTags(path string, tags []string) error {
+	if len(tags) == 0 {
+		return fmt.Errorf("tags is empty")
+	}
+
+	for _, tag := range tags {
+		fmt.Printf("|%s|%d\n", tag, len(tag))
+	}
+
+	path = c.createPath(path)
+	node, err := c.services.Storage.GetNode(path)
+	if err != nil || node == nil {
+		return fmt.Errorf("node does not exist by path '%s'", path)
+	}
+	node.AddTags(tags...)
+
+	return nil
+}
+
+func (c *CommandProcessorHandler) handleRemoveNodeTags(path string, tags []string) error {
+	if len(tags) == 0 {
+		return fmt.Errorf("tags is empty")
+	}
+
+	path = c.createPath(path)
+	node, err := c.services.Storage.GetNode(path)
+	if err != nil || node == nil {
+		return fmt.Errorf("node does not exist by path '%s'", path)
+	}
+	node.RemoveTags(tags...)
+
+	return nil
+}
+
+func (c *CommandProcessorHandler) handleShowNodesByTags(tags []string) error {
+	if len(tags) == 0 {
+		return fmt.Errorf("tags is empty")
+	}
+
+	str := c.services.Storage
+	err := str.WalkNodes(func(node *storage.Node) {
+		if node.HasTags(tags...) {
+			c.showNode(node)
+		}
+	})
+	if err != nil {
+		return fmt.Errorf("failed to walk nodes: %v", err)
+	}
+
+	return nil
+}
+
 func (c *CommandProcessorHandler) handleSave(path string) error {
 	if path == "" {
 		path = c.config.Storage.Path()
@@ -643,26 +766,26 @@ func (c *CommandProcessorHandler) getTokens(data string) []string {
 		case '"':
 			if inQuotes {
 				if i > start {
-					res = append(res, data[start:i])
+					res = append(res, strings.TrimSpace(data[start:i]))
 				}
 				start = i + 1
 				inQuotes = false
-			} else if i == start || c.isSpace(data[i-1]) {
+			} else if i == 0 || c.isSpace(data[i-1]) {
 				inQuotes = true
 				start = i + 1
 			}
 		case ' ', '\t', '\n':
-			if !inQuotes && i > start {
-				res = append(res, data[start:i])
+			if !inQuotes {
+				if i > start {
+					res = append(res, data[start:i])
+				}
 				start = i + 1
-			} else if i == start {
-				start++
 			}
 		}
 	}
 
 	if start < len(data) {
-		res = append(res, data[start:])
+		res = append(res, strings.TrimSpace(data[start:]))
 	}
 
 	return res

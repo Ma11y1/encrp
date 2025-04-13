@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+const Version = "1.1"
+
 type StorageType string
 
 const (
@@ -36,7 +38,7 @@ type storage struct {
 func NewStorage() *Storage {
 	s := &Storage{
 		t:          LocalFileStorageType,
-		version:    "1.0",
+		version:    Version,
 		tsCreate:   time.Now().Unix(),
 		lastDevice: &Device{},
 		data:       NewStorageNode("root"),
