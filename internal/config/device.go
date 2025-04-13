@@ -36,14 +36,14 @@ func newDevice() *Device {
 		device.PlatformVersion = hostInfo.PlatformVersion
 		device.Hostname = hostInfo.Hostname
 	} else {
-		logger.Errf("Config.LastDevice()", "failed to get host info: %v", err)
+		logger.Errf("Config.newDevice()", "Failed to get host info: %v", err)
 	}
 
 	vmem, err := mem.VirtualMemory()
 	if err == nil {
 		device.TotalRAM = fmt.Sprintf("%.2f GB", float64(vmem.Total)/1024/1024/1024)
 	} else {
-		logger.Errf("Config.LastDevice()", "failed to get virtual memory: %v", err)
+		logger.Errf("Config.newDevice()", "Failed to get virtual memory: %v", err)
 	}
 
 	diskPath := "/"
@@ -54,7 +54,7 @@ func newDevice() *Device {
 	if err == nil {
 		device.TotalDisk = fmt.Sprintf("%.2f GB", float64(diskStat.Total)/1024/1024/1024)
 	} else {
-		logger.Errf("Config.LastDevice()", "failed to get disk info: %v", err)
+		logger.Errf("Config.newDevice()", "Failed to get disk info: %v", err)
 	}
 	return device
 }

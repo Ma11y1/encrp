@@ -6,13 +6,11 @@ import (
 )
 
 func New(location, msg string) error {
-	logger.Err(location, msg)
 	return fmt.Errorf("[%s] %s", location, msg)
 }
 
 func Newf(location, format string, args ...interface{}) error {
 	msg := fmt.Sprintf(format, args...)
-	logger.Err(location, msg)
 	return fmt.Errorf("[%s] %s", location, msg)
 }
 

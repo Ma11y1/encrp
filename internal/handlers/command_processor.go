@@ -118,6 +118,8 @@ func (c *CommandProcessorHandler) Start(ctx context.Context) error {
 			continue
 		}
 
+		logger.Infof("CommandProcessorHandler.Start()", "Executing command '%s'", command)
+
 		err = action(tokens[1:])
 		if err != nil {
 			logger.Warnf("CommandProcessorHandler.Start()", "Error processing command %s: %s", command, err)

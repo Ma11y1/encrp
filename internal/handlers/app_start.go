@@ -24,7 +24,7 @@ func (h *AppStartHandler) Start(ctx context.Context) error {
 	fmt.Printf("v.%s\n", h.config.General.Version())
 
 	if ctx.Err() != nil {
-		return errors.WrapLog(ctx.Err(), "App.Start()", "Preliminary completion of execution")
+		return errors.Wrap(ctx.Err(), "AppStartHandler.Start()", "Preliminary completion of execution")
 	}
 
 	password, pathStorage := getArg("/p"), getArg("/s")
@@ -39,12 +39,12 @@ func (h *AppStartHandler) Start(ctx context.Context) error {
 	}
 
 	if ctx.Err() != nil {
-		return errors.WrapLog(ctx.Err(), "App.Start()", "Preliminary completion of execution")
+		return errors.WrapLog(ctx.Err(), "AppStartHandler.Start()", "Preliminary completion of execution")
 	}
 
 	if pathStorage == "" {
 		if err := promptInput("storage > ", &pathStorage, 3); err != nil {
-			return errors.WrapLog(err, "AppStartHandler.Start()", "Error reading path storage")
+			return errors.Wrap(err, "AppStartHandler.Start()", "Error reading path storage")
 		}
 		if pathStorage == "exit" {
 			return errors.New("AppStartHandler.Start()", "Premature termination")
@@ -60,9 +60,7 @@ func (h *AppStartHandler) Start(ctx context.Context) error {
 		return errors.Wrapf(err, "AppStartHandler.Start()", "Error loading storage by path '%s': %v", pathStorage, err)
 	}
 
-	if ctx.Err() != nil {
-		return errors.WrapLog(ctx.Err(), "App.Start()", "Preliminary completion of execution")
-	}
+	logger.Infof("AppStartHandler.Start()", "Successfully start app with storage by path '%s'", pathStorage)
 
 	return nil
 }

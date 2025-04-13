@@ -5,6 +5,7 @@ import (
 	"encrp/internal/config"
 	"encrp/internal/errors"
 	"encrp/internal/handlers"
+	"encrp/internal/logger"
 	"encrp/internal/services"
 )
 
@@ -36,6 +37,7 @@ func NewApp() (*App, error) {
 
 func (a *App) Start(ctx context.Context) error {
 	if a.isStarted {
+		logger.Err("App.Start()", "App is already started")
 		return errors.New("App.Start()", "App is already started")
 	}
 	defer func() { a.Stop() }()
@@ -59,6 +61,7 @@ func (a *App) Start(ctx context.Context) error {
 
 func (a *App) Stop() error {
 	if !a.isStarted {
+		logger.Err("App.Stop()", "App is already stopped")
 		return errors.New("App.Stop()", "App is already stopped")
 	}
 

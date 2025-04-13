@@ -9,7 +9,6 @@ import (
 	"encoding/binary"
 	"encrp/internal/config"
 	"encrp/internal/errors"
-	"fmt"
 	"io"
 	"math/big"
 )
@@ -35,7 +34,7 @@ func NewCryptAESGCMService(cfg *config.Config, services *Container) *CryptAESGCM
 func (s *CryptAESGCMService) generateBlockSize() (int, error) {
 	bigIntBlockSize, err := rand.Int(rand.Reader, big.NewInt(s.maxBlockSize-s.minBlockSize+1))
 	if err != nil {
-		return 0, fmt.Errorf("failed to generate block size: %w", err)
+		return 0, errors.Wrap(err, "CryptAESGCMService.generateBlockSize()", "Failed to generate block size")
 	}
 	return int(bigIntBlockSize.Int64() + s.minBlockSize), nil
 }
@@ -48,17 +47,17 @@ func (s *CryptAESGCMService) generateBlockSize() (int, error) {
 //	[iv1...(12 byte)][block size...(2 byte)][ciphertext+checksum-sha256(from plaintext, 32 byte)...(block size)][iv2...(12 byte)][block size...(2 byte)][ciphertext+checksum-sha256(from plaintext, 32 byte)...(block size)]...
 func (s *CryptAESGCMService) Encrypt(key, data []byte) ([]byte, error) {
 	if len(key) != 16 && len(key) != 24 && len(key) != 32 {
-		return nil, errors.Newf("CryptAESGCMService.Encrypt()", "invalid key length %d bytes, it must be 16, 24, or 32 bytes", len(key))
+		return nil, errors.Newf("CryptAESGCMService.Encrypt()", "Invalid key length %d bytes, it must be 16, 24, or 32 bytes", len(key))
 	}
 
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, errors.Wrap(err, "CryptAESGCMService.Encrypt()", "failed to create cipher")
+		return nil, errors.Wrap(err, "CryptAESGCMService.Encrypt()", "Failed to create cipher")
 	}
 
 	aesGCM, err := cipher.NewGCM(block)
 	if err != nil {
-		return nil, errors.Wrap(err, "CryptAESGCMService.Encrypt()", "failed to create GCM")
+		return nil, errors.Wrap(err, "CryptAESGCMService.Encrypt()", "Failed to create GCM")
 	}
 
 	dataLen := len(data)
@@ -68,7 +67,7 @@ func (s *CryptAESGCMService) Encrypt(key, data []byte) ([]byte, error) {
 
 	for position := 0; position < dataLen; {
 		if _, err = rand.Read(iv); err != nil {
-			return nil, errors.Wrap(err, "CryptAESGCMService.Encrypt()", "failed to generate IV")
+			return nil, errors.Wrap(err, "CryptAESGCMService.Encrypt()", "Failed to generate IV")
 		}
 
 		blockSize, err := s.generateBlockSize()
@@ -83,7 +82,7 @@ func (s *CryptAESGCMService) Encrypt(key, data []byte) ([]byte, error) {
 		blockData := data[position : position+blockSize]
 
 		if _, err = hasher.Write(blockData); err != nil {
-			return nil, errors.Wrap(err, "CryptAESGCMService.Encrypt()", "failed to compute block hash of checksum")
+			return nil, errors.Wrap(err, "CryptAESGCMService.Encrypt()", "Failed to compute block hash of checksum")
 		}
 		checksum := hasher.Sum(nil)
 
