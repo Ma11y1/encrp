@@ -471,10 +471,10 @@ func (c *CommandProcessorHandler) showNode(node *storage.Node) error {
 
 	dataKeys := node.Data().Keys()
 	if len(dataKeys) > 0 {
-		fmt.Println("\tdata: ")
+		fmt.Println("data: ")
 		nodeData := node.Data()
 		for _, key := range dataKeys {
-			fmt.Printf("\t\t%s: %s\n", key, nodeData.Get(key))
+			fmt.Printf("\t%s: %s\n", key, nodeData.Get(key))
 		}
 	}
 	fmt.Println("------------------------")
