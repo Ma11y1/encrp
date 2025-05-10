@@ -1,335 +1,279 @@
 package services
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"encrp/internal/config"
 	"encrp/internal/errors"
+	"golang.org/x/crypto/pbkdf2"
+	"hash"
 	"io"
 	"math/big"
 )
 
 type CryptService interface {
-	Encrypt(key, data []byte) ([]byte, error)
-	EncryptPipe(key []byte, in io.Reader, out io.Writer) error
-	Decrypt(key, data []byte) ([]byte, error)
-	DecryptPipe(key []byte, in io.Reader, out io.Writer) error
+	Encrypt(key []byte, in io.Reader, out io.Writer) error
+	Decrypt(key []byte, in io.Reader, out io.Writer) error
 }
 
 type CryptAESGCMService struct {
-	config       *config.Config
-	services     *Container
-	minBlockSize int64 // recommended 512
-	maxBlockSize int64 // recommended 64 * 1024
+	config            *config.Config
+	services          *Container
+	version           string
+	headerMagicPrefix []byte
+	saltSize          int
+	keyDerivationIter int
+	keyHashFactory    func() hash.Hash
+	keyLength         int
+	minBlockSize      int64
+	maxBlockSize      int64
 }
 
 func NewCryptAESGCMService(cfg *config.Config, services *Container) *CryptAESGCMService {
-	return &CryptAESGCMService{config: cfg, services: services, minBlockSize: cfg.Crypt.MinBlockSize(), maxBlockSize: cfg.Crypt.MaxBlockSize()}
+	return &CryptAESGCMService{
+		config:            cfg,
+		services:          services,
+		version:           "1.1",
+		saltSize:          32,
+		headerMagicPrefix: []byte("EncData__"),
+		keyDerivationIter: 100_000,
+		keyHashFactory:    sha256.New,
+		keyLength:         32,
+		minBlockSize:      cfg.Crypt.MinBlockSize(),
+		maxBlockSize:      cfg.Crypt.MaxBlockSize(),
+	}
+}
+
+func (s *CryptAESGCMService) deriveKey(passphrase, salt []byte) []byte {
+	return pbkdf2.Key(passphrase, salt, s.keyDerivationIter, s.keyLength, s.keyHashFactory)
+}
+
+// writeHeader header structure: [magic prefix][version][salt]
+func (s *CryptAESGCMService) writeHeader(out io.Writer, salt []byte) error {
+	lenHeaderMagicPrefix := len(s.headerMagicPrefix)
+	lenVersion := len(s.version)
+	header := make([]byte, lenHeaderMagicPrefix+lenVersion+s.saltSize)
+	copy(header, s.headerMagicPrefix)
+	copy(header[lenHeaderMagicPrefix:], s.version)
+	copy(header[lenHeaderMagicPrefix+lenVersion:], salt[:s.saltSize])
+	_, err := out.Write(header)
+	return err
+}
+
+func (s *CryptAESGCMService) readHeader(in io.Reader) ([]byte, error) {
+	lenHeaderMagicPrefix := len(s.headerMagicPrefix)
+	lenVersion := len(s.version)
+	header := make([]byte, lenHeaderMagicPrefix+lenVersion+s.saltSize)
+
+	if _, err := io.ReadFull(in, header); err != nil {
+		return nil, errors.Wrap(err, "CryptService.readHeader()", "failed to read header")
+	}
+
+	if !bytes.HasPrefix(header[:lenHeaderMagicPrefix], s.headerMagicPrefix) {
+		return nil, errors.New("CryptService.readHeader()", "invalid header")
+	}
+
+	if string(header[lenHeaderMagicPrefix:lenHeaderMagicPrefix+lenVersion]) != s.version {
+		return nil, errors.New("CryptService.readHeader()", "unsupported version")
+	}
+
+	return header, nil
 }
 
 func (s *CryptAESGCMService) generateBlockSize() (int, error) {
-	bigIntBlockSize, err := rand.Int(rand.Reader, big.NewInt(s.maxBlockSize-s.minBlockSize+1))
+	diff := s.maxBlockSize - s.minBlockSize + 1
+	nBig, err := rand.Int(rand.Reader, big.NewInt(diff))
 	if err != nil {
-		return 0, errors.Wrap(err, "CryptAESGCMService.generateBlockSize()", "Failed to generate block size")
+		return 0, errors.Wrap(err, "CryptService.generateBlockSize()", "failed to generate random block size")
 	}
-	return int(bigIntBlockSize.Int64() + s.minBlockSize), nil
+	return int(nBig.Int64() + s.minBlockSize), nil
 }
 
-// Encrypt AES-GCM encrypts data from slice data
-//
-//	Adds a new 12-byte size initialization vector to each block
-//	Adds a sha256 hash to the end of the block to check plaintext integrity
-//	Decrypted only by the DecryptPipe() function
-//	[iv1...(12 byte)][block size...(2 byte)][ciphertext+checksum-sha256(from plaintext, 32 byte)...(block size)][iv2...(12 byte)][block size...(2 byte)][ciphertext+checksum-sha256(from plaintext, 32 byte)...(block size)]...
-func (s *CryptAESGCMService) Encrypt(key, data []byte) ([]byte, error) {
-	if len(key) != 16 && len(key) != 24 && len(key) != 32 {
-		return nil, errors.Newf("CryptAESGCMService.Encrypt()", "Invalid key length %d bytes, it must be 16, 24, or 32 bytes", len(key))
+func (s *CryptAESGCMService) wipeBytes(b []byte) {
+	if b == nil {
+		return
 	}
-
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, errors.Wrap(err, "CryptAESGCMService.Encrypt()", "Failed to create cipher")
+	for i := 0; i < len(b); i++ {
+		b[i] = 0
 	}
-
-	aesGCM, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, errors.Wrap(err, "CryptAESGCMService.Encrypt()", "Failed to create GCM")
-	}
-
-	dataLen := len(data)
-	hasher := sha256.New()
-	iv := make([]byte, aesGCM.NonceSize())
-	encryptedData := make([]byte, 0, dataLen)
-
-	for position := 0; position < dataLen; {
-		if _, err = rand.Read(iv); err != nil {
-			return nil, errors.Wrap(err, "CryptAESGCMService.Encrypt()", "Failed to generate IV")
-		}
-
-		blockSize, err := s.generateBlockSize()
-		if err != nil {
-			return nil, errors.Wrap(err, "CryptAESGCMService.Encrypt()", "")
-		}
-
-		if position+blockSize > dataLen {
-			blockSize = dataLen - position
-		}
-
-		blockData := data[position : position+blockSize]
-
-		if _, err = hasher.Write(blockData); err != nil {
-			return nil, errors.Wrap(err, "CryptAESGCMService.Encrypt()", "Failed to compute block hash of checksum")
-		}
-		checksum := hasher.Sum(nil)
-
-		ciphertext := aesGCM.Seal(nil, iv, append(blockData, checksum...), nil)
-
-		length := uint16(len(ciphertext))
-		encryptedData = append(encryptedData, iv...)
-		encryptedData = append(encryptedData, byte(length>>8), byte(length&0xFF))
-		encryptedData = append(encryptedData, ciphertext...)
-
-		position += blockSize
-
-		hasher.Reset()
-	}
-
-	return encryptedData, nil
 }
 
-// EncryptPipe AES-GCM encrypts data from an input reader to an output writer
-//
-//	Adds a new 12-byte size initialization vector to each block
-//	Adds a sha256 hash to the end of the block to check plaintext integrity
-//	Decrypted only by the DecryptPipe() function
-//	[iv1...(12 byte)][block size...(2 byte)][ciphertext+checksum-sha256(from plaintext, 32 byte)...(block size)][iv2...(12 byte)][block size...(2 byte)][ciphertext+checksum-sha256(from plaintext, 32 byte)...(block size)]...
-func (s *CryptAESGCMService) EncryptPipe(key []byte, in io.Reader, out io.Writer) error {
-	if len(key) != 16 && len(key) != 24 && len(key) != 32 {
-		return errors.Newf("CryptAESGCMService.EncryptPipe()", "invalid key length %d bytes, it must be 16, 24, or 32 bytes", len(key))
+func (s *CryptAESGCMService) Encrypt(passphrase []byte, in io.Reader, out io.Writer) error {
+	salt := make([]byte, s.saltSize)
+	if _, err := rand.Read(salt); err != nil {
+		return errors.Wrap(err, "CryptService.Encrypt()", "failed to read salt")
 	}
 
-	block, err := aes.NewCipher(key)
+	bufOut := bufio.NewWriter(out)
+	defer bufOut.Flush()
+
+	if err := s.writeHeader(bufOut, salt); err != nil {
+		return errors.Wrap(err, "CryptService.Encrypt()", "failed to write header")
+	}
+
+	key := s.deriveKey(passphrase, salt)
+	defer s.wipeBytes(key)
+	s.wipeBytes(passphrase)
+	s.wipeBytes(salt)
+
+	blockCipher, err := aes.NewCipher(key)
 	if err != nil {
-		return errors.Wrap(err, "CryptAESGCMService.EncryptPipe()", "failed to create cipher")
+		return errors.Wrap(err, "CryptService.Encrypt()", "failed to create block cipher")
 	}
 
-	aesGCM, err := cipher.NewGCM(block)
+	aesGCM, err := cipher.NewGCM(blockCipher)
 	if err != nil {
-		return errors.Wrap(err, "CryptAESGCMService.EncryptPipe()", "failed to create GCM")
+		return errors.Wrap(err, "CryptService.Encrypt()", "failed to create GCM")
 	}
 
-	hasher := sha256.New()
-	iv := make([]byte, aesGCM.NonceSize())
+	sequence := uint64(0) // AAD
+	buff := make([]byte, s.maxBlockSize)
+	defer s.wipeBytes(buff)
+	aad := make([]byte, 8)
+	hasher := hmac.New(sha256.New, key)
 
 	for {
-		if _, err = rand.Read(iv); err != nil {
-			return errors.Wrap(err, "CryptAESGCMService.EncryptPipe()", "failed to generate IV")
-		}
-
 		blockSize, err := s.generateBlockSize()
 		if err != nil {
-			return errors.Wrap(err, "CryptAESGCMService.EncryptPipe()", "")
+			return errors.Wrap(err, "CryptService.Encrypt()", "block size error")
 		}
 
-		buffer := make([]byte, blockSize+sha256.Size)
-
-		n, err := in.Read(buffer[:sha256.Size])
-		if err == io.EOF {
+		n, err := io.ReadFull(in, buff[:blockSize])
+		if err == io.EOF || errors.Is(err, io.ErrUnexpectedEOF) && n == 0 {
 			break
 		}
+		if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+			return errors.Wrap(err, "CryptService.Encrypt()", "read block data error")
+		}
+		data := buff[:n]
 
-		if err != nil {
-			return errors.Wrap(err, "CryptAESGCMService.EncryptPipe()", "read error")
+		iv := make([]byte, aesGCM.NonceSize())
+		if _, err := rand.Read(iv); err != nil {
+			return errors.Wrap(err, "CryptService.Encrypt()", "generate IV error")
 		}
 
-		blockData := buffer[:n]
-
-		if _, err = hasher.Write(blockData); err != nil {
-			return errors.Wrap(err, "CryptAESGCMService.EncryptPipe()", "failed to compute block hash")
-		}
-
-		checksum := hasher.Sum(nil)
-
-		ciphertext := aesGCM.Seal(nil, iv, append(blockData, checksum...), nil)
-
-		// write iv
-		if _, err = out.Write(iv); err != nil {
-			return errors.Wrap(err, "CryptAESGCMService.EncryptPipe()", "failed to write IV")
-		}
-
-		// write block size
-		size := uint16(len(ciphertext))
-		if _, err = out.Write([]byte{byte(size >> 8), byte(size & 0xFF)}); err != nil {
-			return errors.Wrap(err, "CryptAESGCMService.EncryptPipe()", "failed to write block size")
-		}
-
-		// write data
-		if _, err = out.Write(ciphertext); err != nil {
-			return errors.Wrap(err, "CryptAESGCMService.EncryptPipe()", "failed to write ciphertext")
-		}
+		binary.BigEndian.PutUint64(aad, sequence)
 
 		hasher.Reset()
-	}
+		hasher.Write(key)
+		hasher.Write(aad)
+		hasher.Write(iv)
+		hasher.Write(data)
+		checksum := hasher.Sum(nil)
 
+		payload := make([]byte, len(data)+len(checksum))
+		copy(payload, data)
+		copy(payload[len(data):], checksum)
+		s.wipeBytes(checksum)
+
+		ciphertext := aesGCM.Seal(nil, iv, payload, aad)
+
+		// header struct: [AAD: sequence (uint64 8 byte)][IV: nonce size (12 byte)][block size (uint32 4 byte)]
+		header := make([]byte, 8+len(iv)+4)
+		binary.BigEndian.PutUint64(header[0:8], sequence)
+		copy(header[8:], iv)
+		binary.BigEndian.PutUint32(header[8+len(iv):], uint32(len(ciphertext)))
+
+		if _, err := bufOut.Write(header); err != nil {
+			return errors.Wrap(err, "CryptService.Encrypt()", "fail write header")
+		}
+		if _, err := bufOut.Write(ciphertext); err != nil {
+			return errors.Wrap(err, "CryptService.Encrypt()", "failed write ciphertext")
+		}
+
+		sequence++
+	}
 	return nil
 }
 
-// Decrypt decrypts data usage AES-GCM and return it
-//
-//	CryptKey length only 16, 24, 32
-//
-//	Expects each encrypted block to start with a 12-byte IV.
-//	[iv1...(12 byte)][block size...(2 byte)][ciphertext+checksum-sha256(from plaintext, 32 byte)...(block size)][iv2...(12 byte)][block size...(2 byte)][ciphertext+checksum-sha256(from plaintext, 32 byte)...(block size)]...
-func (s *CryptAESGCMService) Decrypt(key, data []byte) ([]byte, error) {
-	if len(key) != 16 && len(key) != 24 && len(key) != 32 {
-		return nil, errors.Newf("CryptAESGCMService.Decrypt()", "invalid key length %d bytes, it must be 16, 24, or 32 bytes", len(key))
+func (s *CryptAESGCMService) Decrypt(passphrase []byte, in io.Reader, out io.Writer) error {
+	header, err := s.readHeader(in)
+	if err != nil {
+		return errors.Wrap(err, "CryptService.Decrypt()", "failed to read header")
 	}
+
+	salt := header[len(s.headerMagicPrefix)+len(s.version):][:s.saltSize]
+	key := s.deriveKey(passphrase, salt)
+	defer s.wipeBytes(key)
+	s.wipeBytes(passphrase)
 
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, errors.Wrap(err, "CryptAESGCMService.Decrypt()", "failed to create cipher")
+		return errors.Wrap(err, "CryptService.Decrypt()", "failed to create block cipher")
 	}
 
 	aesGCM, err := cipher.NewGCM(block)
 	if err != nil {
-		return nil, errors.Wrap(err, "CryptAESGCMService.Decrypt()", "failed to create GCM")
+		return errors.Wrap(err, "CryptService.Decrypt()", "failed to create GCM")
 	}
 
-	ivSize := aesGCM.NonceSize()
-	if len(data) < ivSize+sha256.Size+aesGCM.Overhead() {
-		return nil, errors.New("CryptAESGCMService.Decrypt()", "data is too short to contain IV, checksum and aes overhead")
-	}
+	bufIn := bufio.NewReader(in)
+	bufOut := bufio.NewWriter(out)
+	defer bufOut.Flush()
 
-	hasher := sha256.New()
-	decryptedData := make([]byte, 0, len(data))
-
-	for position := 0; position < len(data); {
-		if position+ivSize > len(data) {
-			return nil, errors.Newf("CryptAESGCMService.Decrypt()", "incomplete IV at position %d", position)
-		}
-
-		iv := data[position : position+ivSize]
-		position += ivSize
-
-		if position+2 > len(data) {
-			return nil, errors.Newf("CryptAESGCMService.Decrypt()", "incomplete length field at position %d", position)
-		}
-
-		blockSize := int(data[position])<<8 | int(data[position+1])
-		position += 2
-
-		if position+blockSize > len(data) {
-			return nil, errors.Newf("CryptAESGCMService.Decrypt()", "incomplete block at position %d", position)
-		}
-
-		plaintextWithChecksum, err := aesGCM.Open(nil, iv, data[position:position+blockSize], nil)
-		if err != nil {
-			return nil, errors.Wrapf(err, "CryptAESGCMService.Decrypt()", "failed to decrypt block at position %d", position)
-		}
-
-		position += blockSize
-
-		if len(plaintextWithChecksum) < sha256.Size {
-			return nil, errors.Newf("CryptAESGCMService.Decrypt()", "decrypted block too short at position %d", position)
-		}
-
-		plaintext := plaintextWithChecksum[:len(plaintextWithChecksum)-sha256.Size]
-
-		if _, err = hasher.Write(plaintext); err != nil {
-			return nil, errors.Wrap(err, "CryptAESGCMService.Decrypt()", "failed to compute checksum")
-		}
-
-		// computed checksum vs expected checksum
-		if !bytes.Equal(hasher.Sum(nil), plaintextWithChecksum[len(plaintextWithChecksum)-sha256.Size:]) {
-			return nil, errors.Newf("CryptAESGCMService.Decrypt()", "checksum mismatch in block at position %d", position)
-		}
-
-		hasher.Reset()
-
-		decryptedData = append(decryptedData, plaintext...)
-	}
-
-	return decryptedData, nil
-}
-
-// DecryptPipe decrypts data from an input reader to an output writer usage AES-GCM
-//
-//	CryptKey length only 16, 24, 32
-//
-//	 Expects each encrypted block to start with a 12-byte IV.
-//	[iv1...(12 byte)][block size...(2 byte)][ciphertext+checksum-sha256(from plaintext, 32 byte)...(block size)][iv2...(12 byte)][block size...(2 byte)][ciphertext+checksum-sha256(from plaintext, 32 byte)...(block size)]...
-func (s *CryptAESGCMService) DecryptPipe(key []byte, in io.Reader, out io.Writer) error {
-	if len(key) != 16 && len(key) != 24 && len(key) != 32 {
-		return errors.Newf("CryptAESGCMService.DecryptPipe()", "invalid key length %d bytes, it must be 16, 24, or 32 bytes", len(key))
-	}
-
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return errors.Wrap(err, "CryptAESGCMService.DecryptPipe()", "failed to create cipher")
-	}
-
-	aesGCM, err := cipher.NewGCM(block)
-	if err != nil {
-		return errors.Wrap(err, "CryptAESGCMService.DecryptPipe()", "failed to create GCM")
-	}
-
-	if aesGCM.NonceSize() == 0 {
-		return errors.Newf("CryptAESGCMService.DecryptPipe()", "invalid nonce size: %d", aesGCM.NonceSize())
-	}
-
-	hasher := sha256.New()
-	iv := make([]byte, aesGCM.NonceSize())
-	blockSizeBuffer := make([]byte, 2)
+	// header struct: [AAD: sequence (uint64 8 byte)][IV: nonce size (12 byte)][block size (uint32 4 byte)]
+	blockHeader := make([]byte, 8+aesGCM.NonceSize()+4)
+	nonceSize := aesGCM.NonceSize()
+	sequence := uint64(0)
+	aad := make([]byte, 8)
+	hasher := hmac.New(sha256.New, key)
 
 	for {
-		if _, err = io.ReadFull(in, iv); err == io.EOF {
+		_, err = io.ReadFull(bufIn, blockHeader)
+		if err == io.EOF {
 			break
 		} else if err != nil {
-			return errors.Wrap(err, "CryptAESGCMService.DecryptPipe()", "failed to read IV")
+			return errors.Wrap(err, "CryptService.Decrypt()", "failed to read block header")
 		}
 
-		if _, err = io.ReadFull(in, blockSizeBuffer); err == io.EOF {
-			break
-		} else if err != nil {
-			return errors.Wrap(err, "CryptAESGCMService.DecryptPipe()", "failed to read block size")
+		headerSequence := binary.BigEndian.Uint64(blockHeader[0:8])
+		iv := blockHeader[8 : 8+nonceSize]
+		length := binary.BigEndian.Uint32(blockHeader[8+nonceSize:])
+
+		if headerSequence != sequence {
+			return errors.Newf("CryptService.Decrypt()", "block sequence mismatch: got %d, expected %d", headerSequence, sequence)
+		}
+		sequence++
+
+		ciphertext := make([]byte, length)
+		if _, err = io.ReadFull(bufIn, ciphertext); err != nil {
+			return errors.Wrap(err, "CryptService.Decrypt()", "incomplete ciphertext for block")
 		}
 
-		blockSize := binary.BigEndian.Uint16(blockSizeBuffer) // max block length 16 byte
+		binary.BigEndian.PutUint64(aad, headerSequence)
 
-		ciphertext := make([]byte, blockSize)
-		if _, err = io.ReadFull(in, ciphertext); err != nil {
-			return errors.Wrap(err, "CryptAESGCMService.DecryptPipe()", "failed to read ciphertext")
-		}
-
-		plaintext, err := aesGCM.Open(nil, iv, ciphertext, nil)
+		payload, err := aesGCM.Open(nil, iv, ciphertext, aad)
 		if err != nil {
-			return errors.Wrap(err, "CryptAESGCMService.DecryptPipe()", "failed to decrypt data")
+			return errors.Wrapf(err, "CryptService.Decrypt()", "decryption/auth failed for block %d", headerSequence)
 		}
 
-		dataLen := len(plaintext) - sha256.Size
-		if dataLen < 0 {
-			return errors.New("CryptAESGCMService.DecryptPipe()", "data too short for checksum")
+		// split data and checksum
+		if len(payload) < sha256.Size {
+			return errors.Newf("CryptService.Decrypt()", "payload too short in block %d", headerSequence)
 		}
 
-		data := plaintext[:dataLen]
-
-		if _, err = hasher.Write(data); err != nil {
-			return errors.Wrap(err, "CryptAESGCMService.DecryptPipe()", "failed to compute checksum")
-		}
-
-		// checksum vs computed checksum
-		if !bytes.Equal(plaintext[dataLen:], hasher.Sum(nil)) {
-			return errors.New("CryptAESGCMService.DecryptPipe()", "checksum mismatch: data integrity compromised")
-		}
+		data := payload[:len(payload)-sha256.Size]
+		checksum := payload[len(payload)-sha256.Size:]
 
 		hasher.Reset()
+		hasher.Write(key)
+		hasher.Write(aad)
+		hasher.Write(iv)
+		hasher.Write(data)
+		expected := hasher.Sum(nil)
 
-		if _, err = out.Write(data); err != nil {
-			return errors.Wrap(err, "CryptAESGCMService.DecryptPipe()", "failed to write data")
+		if !hmac.Equal(checksum, expected) {
+			return errors.Newf("CryptService.Decrypt()", "checksum mismatch in block %d", headerSequence)
+		}
+
+		if _, err = bufOut.Write(data); err != nil {
+			return errors.Wrap(err, "CryptService.Decrypt()", "failed to write plaintext")
 		}
 	}
 

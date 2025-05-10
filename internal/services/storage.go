@@ -56,19 +56,19 @@ func NewFileStorageService(cfg *config.Config, services *Container) *FileStorage
 
 func (s *FileStorageService) LoadStorage(path string) error {
 	if path == "" {
-		return errors.New("FileStorageService.LoadStorage()", "Path is empty")
+		return errors.New("StorageService.LoadStorage()", "Path is empty")
 	}
 
 	file, err := os.OpenFile(path, os.O_RDONLY|os.O_CREATE, os.ModePerm)
 	if err != nil {
-		return errors.Wrap(err, "FileStorageService.LoadStorage()", "Failed to open file "+path)
+		return errors.Wrap(err, "StorageService.LoadStorage()", "Failed to open file "+path)
 	}
 	defer file.Close()
 
 	salt := make([]byte, s.config.Storage.SaltLength())
 	n, err := file.Read(salt)
 	if err != nil && err != io.EOF {
-		return errors.Wrap(err, "FileStorageService.LoadStorage()", "Failed to read salt "+path)
+		return errors.Wrap(err, "StorageService.LoadStorage()", "Failed to read salt "+path)
 	}
 	if err == io.EOF {
 		s.storage = storage.NewStorage()
@@ -76,11 +76,11 @@ func (s *FileStorageService) LoadStorage(path string) error {
 		return nil
 	}
 	if n != s.config.Storage.SaltLength() {
-		return errors.Newf("FileStorageService.LoadStorage()", "Failed to read salt %s. There is less %d salt than there should be %d", path, n, s.config.Storage.SaltLength())
+		return errors.Newf("StorageService.LoadStorage()", "Failed to read salt %s. There is less %d salt than there should be %d", path, n, s.config.Storage.SaltLength())
 	}
 
 	key, err := s.services.Keys.GenerateArgon2IDKey(
-		[]byte(s.config.General.Password()),
+		[]byte(s.config.General.Passphrase()),
 		salt,
 		s.config.Keys.Argon2TimeCost(),
 		s.config.Keys.Argon2MemoryCost(),
@@ -88,22 +88,22 @@ func (s *FileStorageService) LoadStorage(path string) error {
 		s.config.Keys.Argon2Threads(),
 	)
 	if err != nil {
-		return errors.Wrap(err, "FileStorageService.LoadStorage()", "Failed to generate key")
+		return errors.Wrap(err, "StorageService.LoadStorage()", "Failed to generate key")
 	}
 
 	buffer := &bytes.Buffer{}
-	err = s.services.Crypt.DecryptPipe(key, file, buffer)
+	err = s.services.Crypt.Decrypt(key, file, buffer)
 	if err != nil {
-		return errors.Wrap(err, "FileStorageService.LoadStorage()", "Failed to decrypt storage")
+		return errors.Wrap(err, "StorageService.LoadStorage()", "Failed to decrypt storage")
 	}
 
 	if buffer.Len() == 0 {
-		return errors.Wrap(err, "FileStorageService.LoadStorage()", "Failed to load storage "+path)
+		return errors.Wrap(err, "StorageService.LoadStorage()", "Failed to load storage "+path)
 	}
 
 	s.storage = storage.NewStorage()
 	if err = json.NewDecoder(buffer).Decode(s.storage); err != io.EOF && err != nil { // If we receive an end-of-file error, then most likely it is empty and therefore we continue to execute with an empty storage so as not to cause errors
-		return errors.Wrap(err, "FileStorageService.LoadStorage()", "Failed to decode file "+path)
+		return errors.Wrap(err, "StorageService.LoadStorage()", "Failed to decode file "+path)
 	}
 	s.storage.UpdateTsOpen()
 	s.rootNode = s.storage.Data()
@@ -112,27 +112,27 @@ func (s *FileStorageService) LoadStorage(path string) error {
 
 func (s *FileStorageService) SaveStorage(path string) error {
 	if path == "" {
-		return errors.New("FileStorageService.SaveStorage()", "Path is empty")
+		return errors.New("StorageService.SaveStorage()", "Path is empty")
 	}
 
 	if s.storage == nil {
-		return errors.New("FileStorageService.SaveStorage()", "Storage not exist")
+		return errors.New("StorageService.SaveStorage()", "Storage not exist")
 	}
 	s.storage.LastDevice().SetFromConfig(s.config.Device)
 	s.storage.UpdateTsSave()
 
 	jsonData, err := s.storage.ToJSON()
 	if err != nil {
-		return errors.Wrap(err, "FileStorageService.SaveStorage()", "Failed to encode file "+path)
+		return errors.Wrap(err, "StorageService.SaveStorage()", "Failed to encode file "+path)
 	}
 
 	salt, err := s.services.Keys.GenerateSalt(s.config.Storage.SaltLength())
 	if err != nil {
-		return errors.Wrap(err, "FileStorageService.SaveStorage()", "Failed to generate salt")
+		return errors.Wrap(err, "StorageService.SaveStorage()", "Failed to generate salt")
 	}
 
 	key, err := s.services.Keys.GenerateArgon2IDKey(
-		[]byte(s.config.General.Password()),
+		[]byte(s.config.General.Passphrase()),
 		salt,
 		s.config.Keys.Argon2TimeCost(),
 		s.config.Keys.Argon2MemoryCost(),
@@ -140,23 +140,23 @@ func (s *FileStorageService) SaveStorage(path string) error {
 		s.config.Keys.Argon2Threads(),
 	)
 	if err != nil {
-		return errors.Wrap(err, "FileStorageService.SaveStorage()", "Failed to generate key")
+		return errors.Wrap(err, "StorageService.SaveStorage()", "Failed to generate key")
 	}
 
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.ModePerm)
 	if err != nil {
-		return errors.Wrap(err, "FileStorageService.SaveStorage()", "Failed to open file "+path)
+		return errors.Wrap(err, "StorageService.SaveStorage()", "Failed to open file "+path)
 	}
 	defer file.Close()
 
 	_, err = file.Write(salt)
 	if err != nil {
-		return errors.Wrap(err, "FileStorageService.SaveStorage()", "Failed to write salt in file "+path)
+		return errors.Wrap(err, "StorageService.SaveStorage()", "Failed to write salt in file "+path)
 	}
 
-	err = s.services.Crypt.EncryptPipe(key, bytes.NewReader(jsonData), file)
+	err = s.services.Crypt.Encrypt(key, bytes.NewReader(jsonData), file)
 	if err != nil {
-		return errors.Wrap(err, "FileStorageService.SaveStorage()", "Failed to encrypt file")
+		return errors.Wrap(err, "StorageService.SaveStorage()", "Failed to encrypt file")
 	}
 
 	return nil
@@ -177,7 +177,7 @@ func (s *FileStorageService) WipeStorage() {
 
 func (s *FileStorageService) GetNode(path string) (*storage.Node, error) {
 	if s.storage == nil {
-		return nil, errors.New("FileStorageService.GetNode()", "Storage not exist")
+		return nil, errors.New("StorageService.GetNode()", "Storage not exist")
 	}
 
 	if path == "" || path == s.pathSeparator {
@@ -186,7 +186,7 @@ func (s *FileStorageService) GetNode(path string) (*storage.Node, error) {
 
 	names := strings.SplitN(strings.Trim(path, s.pathSeparator), s.pathSeparator, -1)
 	if len(names) == 0 {
-		return nil, errors.New("FileStorageService.GetNode()", "invalid path")
+		return nil, errors.New("StorageService.GetNode()", "invalid path")
 	}
 
 	node := s.rootNode
@@ -194,7 +194,7 @@ func (s *FileStorageService) GetNode(path string) (*storage.Node, error) {
 		if child := node.Children().Get(name); child != nil {
 			node = child
 		} else {
-			return nil, errors.Newf("FileStorageService.GetNode()", "child with name %s not found", name)
+			return nil, errors.Newf("StorageService.GetNode()", "child with name %s not found", name)
 		}
 	}
 	return node, nil
@@ -202,11 +202,11 @@ func (s *FileStorageService) GetNode(path string) (*storage.Node, error) {
 
 func (s *FileStorageService) PutNode(path string, node *storage.Node) error {
 	if s.storage == nil {
-		return errors.New("FileStorageService.PutNode()", "Storage not exist")
+		return errors.New("StorageService.PutNode()", "Storage not exist")
 	}
 
 	if node == nil {
-		return errors.New("FileStorageService.PutNode()", "node is nil")
+		return errors.New("StorageService.PutNode()", "node is nil")
 	}
 
 	currentNode := s.rootNode
@@ -214,7 +214,7 @@ func (s *FileStorageService) PutNode(path string, node *storage.Node) error {
 	if path != "" && path != s.pathSeparator {
 		names := strings.SplitN(strings.Trim(path, s.pathSeparator), s.pathSeparator, -1)
 		if len(names) == 0 {
-			return errors.New("FileStorageService.PutNode()", "invalid path")
+			return errors.New("StorageService.PutNode()", "invalid path")
 		}
 
 		for _, name := range names {
@@ -233,16 +233,16 @@ func (s *FileStorageService) PutNode(path string, node *storage.Node) error {
 
 func (s *FileStorageService) DeleteNode(path string) error {
 	if s.storage == nil {
-		return errors.New("FileStorageService.DeleteNode()", "Storage not exist")
+		return errors.New("StorageService.DeleteNode()", "Storage not exist")
 	}
 
 	if path == "" || path == s.pathSeparator {
-		return errors.New("FileStorageService.DeleteNode()", "invalid path or attempt to delete root")
+		return errors.New("StorageService.DeleteNode()", "invalid path or attempt to delete root")
 	}
 
 	names := strings.SplitN(strings.Trim(path, s.pathSeparator), s.pathSeparator, -1)
 	if len(names) == 0 {
-		return errors.New("FileStorageService.DeleteNode()", "invalid path")
+		return errors.New("StorageService.DeleteNode()", "invalid path")
 	}
 
 	node := s.rootNode
@@ -251,7 +251,7 @@ func (s *FileStorageService) DeleteNode(path string) error {
 		if child := node.Children().Get(name); child != nil {
 			node = child
 		} else {
-			return errors.Newf("FileStorageService.DeleteNode()", "child with name %s not found", name)
+			return errors.Newf("StorageService.DeleteNode()", "child with name %s not found", name)
 		}
 	}
 
@@ -262,16 +262,16 @@ func (s *FileStorageService) DeleteNode(path string) error {
 
 func (s *FileStorageService) WipeNode(path string) error {
 	if s.storage == nil {
-		return errors.New("FileStorageService.WipeNode()", "Storage not exist")
+		return errors.New("StorageService.WipeNode()", "Storage not exist")
 	}
 
 	if path == "" || path == s.pathSeparator {
-		return errors.New("FileStorageService.WipeNode()", "invalid path")
+		return errors.New("StorageService.WipeNode()", "invalid path")
 	}
 
 	names := strings.SplitN(strings.Trim(path, s.pathSeparator), s.pathSeparator, -1)
 	if len(names) == 0 {
-		return errors.New("FileStorageService.WipeNode()", "invalid path")
+		return errors.New("StorageService.WipeNode()", "invalid path")
 	}
 
 	node := s.rootNode
@@ -280,7 +280,7 @@ func (s *FileStorageService) WipeNode(path string) error {
 		if child := node.Children().Get(name); child != nil {
 			node = child
 		} else {
-			return errors.Newf("FileStorageService.WipeNode()", "child with name %s not found", name)
+			return errors.Newf("StorageService.WipeNode()", "child with name %s not found", name)
 		}
 	}
 
@@ -319,11 +319,11 @@ func (s *FileStorageService) HasNode(path string) bool {
 
 func (s *FileStorageService) WalkNodes(fn func(*storage.Node)) error {
 	if s.storage == nil {
-		return errors.New("FileStorageService.WalkNodes()", "Storage not exist")
+		return errors.New("StorageService.WalkNodes()", "Storage not exist")
 	}
 
 	if fn == nil {
-		return errors.New("FileStorageService.WalkNodes()", "callback func is nil")
+		return errors.New("StorageService.WalkNodes()", "callback func is nil")
 	}
 	if s.rootNode == nil {
 		return nil
@@ -355,22 +355,22 @@ func (s *FileStorageService) GetData(path string) (*storage.Data, error) {
 	if node, err := s.GetNode(path); err == nil {
 		return node.Data(), nil
 	} else {
-		return nil, errors.Wrap(err, "FileStorageService.GetData()", "")
+		return nil, errors.Wrap(err, "StorageService.GetData()", "")
 	}
 }
 
 func (s *FileStorageService) PutData(path string, data *storage.Data) error {
 	if s.storage == nil {
-		return errors.New("FileStorageService.PutData()", "Storage not exist")
+		return errors.New("StorageService.PutData()", "Storage not exist")
 	}
 
 	if path == "" || path == s.pathSeparator || data == nil {
-		return errors.New("FileStorageService.PutData()", "invalid path or nil data")
+		return errors.New("StorageService.PutData()", "invalid path or nil data")
 	}
 
 	names := strings.SplitN(strings.Trim(path, s.pathSeparator), s.pathSeparator, -1)
 	if len(names) == 0 {
-		return errors.New("FileStorageService.PutData()", "invalid path")
+		return errors.New("StorageService.PutData()", "invalid path")
 	}
 
 	node := s.rootNode
@@ -394,18 +394,18 @@ func (s *FileStorageService) PutData(path string, data *storage.Data) error {
 
 func (s *FileStorageService) DeleteData(path string) error {
 	if s.storage == nil {
-		return errors.New("FileStorageService.DeleteData()", "Storage not exist")
+		return errors.New("StorageService.DeleteData()", "Storage not exist")
 	}
 
 	if path == "" || path == s.pathSeparator {
-		return errors.New("FileStorageService.DeleteData()", "invalid path")
+		return errors.New("StorageService.DeleteData()", "invalid path")
 	}
 
 	if node, err := s.GetNode(path); err == nil {
 		node.Data().Clear()
 		return nil
 	} else {
-		return errors.Wrap(err, "FileStorageService.DeleteData()", "node not found")
+		return errors.Wrap(err, "StorageService.DeleteData()", "node not found")
 	}
 }
 
@@ -418,37 +418,37 @@ func (s *FileStorageService) HasData(path string) bool {
 
 func (s *FileStorageService) GetValue(path, key string) (string, error) {
 	if s.storage == nil {
-		return "", errors.New("FileStorageService.GetValue()", "Storage not exist")
+		return "", errors.New("StorageService.GetValue()", "Storage not exist")
 	}
 
 	if path == "" || path == s.pathSeparator || key == "" {
-		return "", errors.New("FileStorageService.GetValue()", "invalid path or key")
+		return "", errors.New("StorageService.GetValue()", "invalid path or key")
 	}
 
 	node, err := s.GetNode(path)
 	if err != nil {
-		return "", errors.Wrap(err, "FileStorageService.GetValue()", "node not found")
+		return "", errors.Wrap(err, "StorageService.GetValue()", "node not found")
 	}
 
 	value := node.Data().Get(key)
 	if value == "" && !node.Data().Has(key) {
-		return "", errors.Newf("FileStorageService.GetValue()", "key %s not found", key)
+		return "", errors.Newf("StorageService.GetValue()", "key %s not found", key)
 	}
 	return value, nil
 }
 
 func (s *FileStorageService) SetValue(path, key, value string) error {
 	if s.storage == nil {
-		return errors.New("FileStorageService.SetValue()", "Storage not exist")
+		return errors.New("StorageService.SetValue()", "Storage not exist")
 	}
 
 	if path == "" || path == s.pathSeparator || key == "" {
-		return errors.New("FileStorageService.SetValue()", "invalid path or key")
+		return errors.New("StorageService.SetValue()", "invalid path or key")
 	}
 
 	names := strings.SplitN(strings.Trim(path, s.pathSeparator), s.pathSeparator, -1)
 	if len(names) == 0 {
-		return errors.New("FileStorageService.SetValue()", "invalid path")
+		return errors.New("StorageService.SetValue()", "invalid path")
 	}
 
 	node := s.rootNode
@@ -468,20 +468,20 @@ func (s *FileStorageService) SetValue(path, key, value string) error {
 
 func (s *FileStorageService) DeleteValue(path, key string) error {
 	if s.storage == nil {
-		return errors.New("FileStorageService.DeleteValue()", "Storage not exist")
+		return errors.New("StorageService.DeleteValue()", "Storage not exist")
 	}
 
 	if path == "" || path == s.pathSeparator || key == "" {
-		return errors.New("FileStorageService.DeleteValue()", "invalid path or key")
+		return errors.New("StorageService.DeleteValue()", "invalid path or key")
 	}
 
 	node, err := s.GetNode(path)
 	if err != nil {
-		return errors.Wrap(err, "FileStorageService.DeleteValue()", "node not found")
+		return errors.Wrap(err, "StorageService.DeleteValue()", "node not found")
 	}
 
 	if !node.Data().Has(key) {
-		return errors.Newf("FileStorageService.DeleteValue()", "key %s not found", key)
+		return errors.Newf("StorageService.DeleteValue()", "key %s not found", key)
 	}
 	node.Data().Remove(key)
 	return nil

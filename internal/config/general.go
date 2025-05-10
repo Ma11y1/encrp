@@ -10,7 +10,7 @@ type General struct {
 }
 
 func newGeneral() *General {
-	cfg := &General{version: "1.1"}
+	cfg := &General{version: "1.2"}
 	password, err := utils.NewSecurePassword("")
 	if err != nil {
 		panic(err)
@@ -19,19 +19,19 @@ func newGeneral() *General {
 	return cfg
 }
 
-func (h *General) Password() string {
+func (h *General) Passphrase() string {
 	return h.password.Get()
 }
 
-func (h *General) PasswordBytes() []byte {
+func (h *General) PassphraseBytes() []byte {
 	return h.password.GetBytes()
 }
 
-func (h *General) WipePassword() {
+func (h *General) WipePassphrase() {
 	h.password.Wipe()
 }
 
-func (h *General) SetPassword(pwd string) {
+func (h *General) SetPassphrase(pwd string) {
 	h.password.Set(pwd)
 }
 

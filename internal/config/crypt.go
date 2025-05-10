@@ -8,7 +8,7 @@ type CryptConfig struct {
 func newCryptConfig() *CryptConfig {
 	return &CryptConfig{
 		minBlockSize: 512,
-		maxBlockSize: 64 * 1024 * 1024,
+		maxBlockSize: 64 * 1024,
 	}
 }
 

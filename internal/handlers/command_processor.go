@@ -3,6 +3,7 @@ package handlers
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"encrp/internal/config"
 	"encrp/internal/errors"
 	"encrp/internal/logger"
@@ -33,7 +34,9 @@ func NewCommandProcessorHandler(cfg *config.Config, handlers *Container, service
 		consoleReader:     bufio.NewReader(os.Stdin),
 		positionSeparator: cfg.Storage.PathSeparator(),
 	}
+
 	actions := make(map[string]func([]string) error)
+	actions["pwd"] = h.handleChangePassphrase
 	actions["info"] = h.handleShowInfo
 	actions["to"] = h.handleMoveToPath
 
@@ -74,6 +77,10 @@ func NewCommandProcessorHandler(cfg *config.Config, handlers *Container, service
 	actions["showtags"] = h.handleShowNodesByTags
 
 	actions["save"] = h.handleSave
+
+	actions["import"] = h.handleImport
+	actions["export"] = h.handleExport
+
 	h.actions = actions
 	return h
 }
@@ -107,11 +114,13 @@ func (c *CommandProcessorHandler) Start(ctx context.Context) error {
 			continue
 		}
 
-		if tokens[0] == "exit" {
+		commandName := strings.ToLower(tokens[0])
+
+		if commandName == "exit" || commandName == "e" {
 			return nil
 		}
 
-		action, exists := c.actions[tokens[0]]
+		action, exists := c.actions[commandName]
 		if !exists {
 			logger.Warnf("CommandProcessorHandler.Start()", "Invalid command '%s'", command)
 			fmt.Printf("invalid command '%s'\n", command)
@@ -138,6 +147,22 @@ func (c *CommandProcessorHandler) input() (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(line), nil
+}
+
+func (c *CommandProcessorHandler) handleChangePassphrase(tokens []string) error {
+	if len(tokens) == 0 {
+		fmt.Println("invalid syntax command: 'pwd <src>'")
+		return errors.Newf("CommandProcessorHandler.handleChangePassphrase()", "Invalid syntax command: 'pwd <src>'")
+	}
+
+	if len(tokens[0]) == 0 {
+		fmt.Println("password is empty")
+		return nil
+	}
+
+	c.config.General.SetPassphrase(tokens[0])
+
+	return nil
 }
 
 func (c *CommandProcessorHandler) handleShowInfo([]string) error {
@@ -675,12 +700,12 @@ func (c *CommandProcessorHandler) handleMoveNode(tokens []string) error {
 		return errors.Newf("CommandProcessorHandler.handleMoveNode()", "Failed to get source node '%s'", sourcePath)
 	}
 
-	fullTargetPath := destinationPath
-	if fullTargetPath != "" {
-		fullTargetPath += c.positionSeparator
+	fullDestinationPath := destinationPath
+	if fullDestinationPath != "" {
+		fullDestinationPath += c.positionSeparator
 	}
-	fullTargetPath += sourceName
-	if str.HasNode(fullTargetPath) {
+	fullDestinationPath += sourceName
+	if str.HasNode(fullDestinationPath) {
 		fmt.Printf("node '%s' already exists at '%s', overwrite? (Y/N): ", sourceName, destinationPath)
 		res, err := c.consoleReader.ReadString('\n')
 		if err != nil {
@@ -692,9 +717,9 @@ func (c *CommandProcessorHandler) handleMoveNode(tokens []string) error {
 			return nil
 		}
 
-		if err = str.DeleteNode(fullTargetPath); err != nil {
-			fmt.Printf("failed to delete existing node at '%s'\n", fullTargetPath)
-			return errors.Wrapf(err, "CommandProcessorHandler.handleMoveNode()", "Failed to delete existing node at '%s'", fullTargetPath)
+		if err = str.DeleteNode(fullDestinationPath); err != nil {
+			fmt.Printf("failed to delete existing node at '%s'\n", fullDestinationPath)
+			return errors.Wrapf(err, "CommandProcessorHandler.handleMoveNode()", "Failed to delete existing node at '%s'", fullDestinationPath)
 		}
 	}
 
@@ -709,10 +734,10 @@ func (c *CommandProcessorHandler) handleMoveNode(tokens []string) error {
 	}
 
 	if sourcePath == c.position {
-		c.position = fullTargetPath
+		c.position = fullDestinationPath
 	}
 
-	logger.Infof("", "Node '%s' moved from '%s' to '%s'\n", sourceName, sourcePath, destinationPath)
+	logger.Infof("CommandProcessorHandler.handleMoveNode()", "Node '%s' moved from '%s' to '%s'\n", sourceName, sourcePath, destinationPath)
 	fmt.Printf("node '%s' moved from '%s' to '%s'\n", sourceName, sourcePath, destinationPath)
 	return nil
 }
@@ -822,6 +847,127 @@ func (c *CommandProcessorHandler) handleSave(tokens []string) error {
 		path = tokens[0]
 	}
 	return c.services.Storage.SaveStorage(path)
+}
+
+func (c *CommandProcessorHandler) handleImport(tokens []string) error {
+	if len(tokens) < 1 {
+		fmt.Println("invalid syntax command: 'import <source path> (destination path)'")
+		return errors.New("CommandProcessorHandler.handleImport()", "Invalid syntax command: 'import <source path> (destination path)'")
+	}
+
+	sourcePath := tokens[0]
+
+	file, err := os.OpenFile(sourcePath, os.O_RDONLY, 0700)
+	if err != nil {
+		fmt.Printf("Failed to open file import data '%s'\n", sourcePath)
+		return errors.Wrapf(err, "CommandProcessorHandler.handleImport()", "Failed to open file import data '%s'", sourcePath)
+	}
+	defer file.Close()
+
+	var dataNode *storage.Node
+
+	reader := json.NewDecoder(file)
+	err = reader.Decode(&dataNode)
+	if err != nil {
+		return errors.Wrapf(err, "CommandProcessorHandler.handleImport()", "Failed to decode file '%s'", sourcePath)
+	}
+
+	if dataNode == nil {
+		return errors.New("CommandProcessorHandler.handleImport()", "failed to retrieve data")
+	}
+
+	destinationPath := ""
+	if len(tokens) > 1 {
+		destinationPath = c.createPath(tokens[1])
+	}
+
+	fullDestinationPath := destinationPath
+	if fullDestinationPath != "" {
+		fullDestinationPath += c.positionSeparator
+	}
+	fullDestinationPath += dataNode.Name()
+
+	str := c.services.Storage
+
+	if str.HasNode(fullDestinationPath) {
+		fmt.Printf("node '%s' already exists at '%s', overwrite? (Y/N): ", dataNode.Name(), destinationPath)
+		res, err := c.consoleReader.ReadString('\n')
+		if err != nil {
+			fmt.Println("failed to read response")
+			return errors.Wrap(err, "CommandProcessorHandler.handleImport()", "Failed to read response")
+		}
+		res = strings.TrimSpace(res)
+		if res != "Y" && res != "y" {
+			return nil
+		}
+
+		if err = str.DeleteNode(fullDestinationPath); err != nil {
+			fmt.Printf("failed to delete existing node at '%s'\n", fullDestinationPath)
+			return errors.Wrapf(err, "CommandProcessorHandler.handleImport()", "Failed to delete existing node at '%s'", fullDestinationPath)
+		}
+	}
+
+	if err = str.PutNode(destinationPath, dataNode); err != nil {
+		fmt.Printf("failed to put node at '%s'\n", destinationPath)
+		return errors.Wrapf(err, "CommandProcessorHandler.handleImport()", "Failed to put node at '%s'", destinationPath)
+	}
+
+	logger.Infof("CommandProcessorHandler.handleImport()", "Node '%s' imported to '%s'\n", dataNode.Name(), destinationPath)
+	fmt.Printf("node '%s' imported to '%s'\n", dataNode.Name(), destinationPath)
+	return nil
+}
+
+func (c *CommandProcessorHandler) handleExport(tokens []string) error {
+	if len(tokens) < 1 {
+		fmt.Println("invalid syntax command: 'export <source path or destination path> (destination path)'")
+		return errors.New("CommandProcessorHandler.handleExport()", "Invalid syntax command: 'export <source path or destination path> (destination path)'")
+	}
+
+	sourcePath, destinationPath := "", ""
+	if len(tokens) > 1 {
+		sourcePath = c.createPath(tokens[0])
+		destinationPath = tokens[1]
+	} else {
+		sourcePath = c.createPath("")
+		destinationPath = tokens[0]
+	}
+
+	fmt.Println("sourcePath:", sourcePath, "destinationPath:", destinationPath)
+
+	str := c.services.Storage
+	if !str.HasNode(sourcePath) {
+		fmt.Printf("source node is not exists by path %s\n", sourcePath)
+		return errors.Newf("CommandProcessorHandler.handleExport()", "Source node is not exists by path %s", sourcePath)
+	}
+
+	node, err := str.GetNode(sourcePath)
+	if err != nil {
+		fmt.Printf("failed to retrieve node by path '%s'\n", sourcePath)
+		return errors.Wrapf(err, "CommandProcessorHandler.handleExport()", "Failed to retrieve node by path '%s'", sourcePath)
+	}
+
+	nodeData, err := json.Marshal(node)
+	if err != nil {
+		fmt.Println("failed to encode node")
+		return errors.Wrapf(err, "CommandProcessorHandler.handleExport()", "Failed to marshal node to JSON")
+	}
+
+	file, err := os.OpenFile(destinationPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0700)
+	if err != nil {
+		fmt.Printf("Failed to open file export data '%s' %v\n", destinationPath, err)
+		return errors.Wrapf(err, "CommandProcessorHandler.handleExport()", "Failed to open file export data '%s'", destinationPath)
+	}
+	defer file.Close()
+
+	_, err = file.Write(nodeData)
+	if err != nil {
+		fmt.Printf("failed to write node to file export data '%s'\n", destinationPath)
+		return errors.Wrapf(err, "CommandProcessorHandler.handleExport()", "Failed to write node to file export data '%s'", destinationPath)
+	}
+
+	logger.Infof("CommandProcessorHandler.handleExport()", "Node '%s' exported to '%s'\n", sourcePath, destinationPath)
+	fmt.Printf("node '%s' exported to '%s'\n", sourcePath, destinationPath)
+	return nil
 }
 
 func (c *CommandProcessorHandler) getTokens(data string) []string {

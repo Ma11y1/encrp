@@ -1,7 +1,7 @@
 package handlers
 
 type Container struct {
-	AppStart         *AppStartHandler
-	AppStop          *AppStopHandler
+	AppStart         *ApplicationStartHandler
+	AppStop          *ApplicationStopHandler
 	CommandProcessor *CommandProcessorHandler
 }

@@ -2,6 +2,7 @@ package errors
 
 import (
 	"encrp/internal/logger"
+	"errors"
 	"fmt"
 )
 
@@ -43,4 +44,8 @@ func WrapfLog(err error, location, format string, args ...interface{}) error {
 	msg := fmt.Sprintf(format, args...)
 	logger.Err(location, fmt.Sprintf("%s: %s", msg, err))
 	return fmt.Errorf("[%s] %s: %w", location, msg, err)
+}
+
+func Is(err, target error) bool {
+	return errors.Is(err, target)
 }

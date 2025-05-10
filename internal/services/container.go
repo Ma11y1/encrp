@@ -1,7 +1,7 @@
 package services
 
 type Container struct {
-	Keys    *KeysService
+	Keys    *CryptKeysService
 	Crypt   CryptService
 	Storage StorageService
 }

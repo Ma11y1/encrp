@@ -10,57 +10,61 @@ import (
 	"os"
 )
 
-type AppStartHandler struct {
+type ApplicationStartHandler struct {
 	config   *config.Config
 	handlers *Container
 	services *services.Container
 }
 
-func NewAppStartHandler(cfg *config.Config, handlers *Container, services *services.Container) *AppStartHandler {
-	return &AppStartHandler{config: cfg, handlers: handlers, services: services}
+func NewAppStartHandler(cfg *config.Config, handlers *Container, services *services.Container) *ApplicationStartHandler {
+	return &ApplicationStartHandler{
+		config:   cfg,
+		handlers: handlers,
+		services: services,
+	}
 }
 
-func (h *AppStartHandler) Start(ctx context.Context) error {
+func (h *ApplicationStartHandler) Start(ctx context.Context) error {
 	fmt.Printf("v.%s\n", h.config.General.Version())
 
 	if ctx.Err() != nil {
-		return errors.Wrap(ctx.Err(), "AppStartHandler.Start()", "Preliminary completion of execution")
+		return errors.Wrap(ctx.Err(), "ApplicationStartHandler.Start()", "Preliminary completion of execution")
 	}
 
-	password, pathStorage := getArg("/p"), getArg("/s")
+	passphrase, pathStorage := getArg("/p"), getArg("/s")
 
-	if password == "" {
-		if err := promptInput("pwd > ", &password, 3); err != nil {
-			return errors.Wrap(err, "AppStartHandler.Start()", "Error reading password")
+	if passphrase == "" {
+		if err := promptInput("pwd > ", &passphrase, 3); err != nil {
+			return errors.Wrap(err, "ApplicationStartHandler.Start()", "Error reading passphrase")
 		}
-		if password == "exit" {
-			return errors.New("AppStartHandler.Start()", "Premature termination")
+		if passphrase == "exit" {
+			return errors.New("ApplicationStartHandler.Start()", "Premature termination")
 		}
 	}
 
 	if ctx.Err() != nil {
-		return errors.WrapLog(ctx.Err(), "AppStartHandler.Start()", "Preliminary completion of execution")
+		return errors.WrapLog(ctx.Err(), "ApplicationStartHandler.Start()", "Preliminary completion of execution")
 	}
 
 	if pathStorage == "" {
 		if err := promptInput("storage > ", &pathStorage, 3); err != nil {
-			return errors.Wrap(err, "AppStartHandler.Start()", "Error reading path storage")
+			return errors.Wrap(err, "ApplicationStartHandler.Start()", "Error reading path storage")
 		}
 		if pathStorage == "exit" {
-			return errors.New("AppStartHandler.Start()", "Premature termination")
+			return errors.New("ApplicationStartHandler.Start()", "Premature termination")
 		}
 	}
 
-	h.config.General.SetPassword(password)
+	h.config.General.SetPassphrase(passphrase)
 	h.config.Storage.SetPath(pathStorage)
 
 	err := h.services.Storage.LoadStorage(pathStorage)
 	if err != nil {
 		fmt.Printf("Error loading storage by path '%s'\n", pathStorage)
-		return errors.Wrapf(err, "AppStartHandler.Start()", "Error loading storage by path '%s': %v", pathStorage, err)
+		return errors.Wrapf(err, "ApplicationStartHandler.Start()", "Error loading storage by path '%s': %v", pathStorage, err)
 	}
 
-	logger.Infof("AppStartHandler.Start()", "Successfully start app with storage by path '%s'", pathStorage)
+	logger.Infof("ApplicationStartHandler.Start()", "Successfully start app with storage by path '%s'", pathStorage)
 
 	return nil
 }
@@ -84,7 +88,7 @@ func promptInput(prompt string, input *string, attempts int) error {
 		}
 		msg := fmt.Sprintf("Attempt %d, error: %v\n", i, err)
 		fmt.Println(msg)
-		logger.Warn("AppStartHandler.promptInput()", msg)
+		logger.Warn("ApplicationStartHandler.promptInput()", msg)
 	}
 	return err
 }
